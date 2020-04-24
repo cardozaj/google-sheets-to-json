@@ -1,7 +1,7 @@
 import {OAuth2Client} from 'google-auth-library';
 import {google, sheets_v4} from 'googleapis';
 import fs from 'fs';
-import {camelCase, zipObject, omit, pick} from 'lodash';
+import {camelCase, isEqual, omit, pick, zipObject} from 'lodash';
 import {addMinutes, format, parse} from 'date-fns';
 
 const SHEET_ID = '1mo7myqHry5r_TKvakvIhHbcEAEQpSiNoNQoIS8sMpvM';
@@ -19,7 +19,7 @@ const ITEM_SHEETS = [
   'Tools',
   'Tops',
   'Bottoms',
-  'Dresses',
+  'Dress-Up',
   'Headwear',
   'Accessories',
   'Socks',
@@ -29,14 +29,10 @@ const ITEM_SHEETS = [
   'Music',
   'Fossils',
   'Other',
+  'Art',
 ];
 
-const CREATURE_SHEETS = [
-  'Bugs - North',
-  'Bugs - South',
-  'Fish - North',
-  'Fish - South',
-];
+const CREATURE_SHEETS = ['Fish', 'Bugs'];
 
 const NOOK_MILE_SHEETS = ['Nook Miles'];
 
@@ -49,6 +45,8 @@ const CONSTRUCTION_SHEETS = ['Construction'];
 const ACHIEVEMENTS_SHEETS = ['Achievements'];
 
 type ItemData = any[];
+
+const validateIds = false;
 
 export async function main(auth: OAuth2Client) {
   const sheets = google.sheets({version: 'v4', auth});
@@ -71,6 +69,9 @@ export async function main(auth: OAuth2Client) {
     ['achievements', ACHIEVEMENTS_SHEETS],
   ];
 
+  const ids = new Set();
+  const duplicates = new Set();
+
   for (const [key, sheetNames] of workSet) {
     console.log(`Loading ${key}`);
 
@@ -85,14 +86,28 @@ export async function main(auth: OAuth2Client) {
     console.log(`Normalising data`);
     data = await normalizeData(data, key);
 
-    if (key === 'creatures') {
-      data = await mergeCreatures(data);
+    if (validateIds) {
+      for (const item of data) {
+        if (ids.has(item['uniqueEntryId'])) {
+          duplicates.add(item['uniqueEntryId']);
+        }
+
+        ids.add(item['uniqueEntryId']);
+      }
+    } else {
+      if (key === 'items') {
+        data = await mergeItemVariations(data);
+      }
+
+      console.log(`Writing data to disk`);
+      fs.writeFileSync(`out/${key}.json`, JSON.stringify(data, undefined, ' '));
+
+      console.log(`Finished ${key}`);
     }
+  }
 
-    console.log(`Writing data to disk`);
-    fs.writeFileSync(`out/${key}.json`, JSON.stringify(data, undefined, ' '));
-
-    console.log(`Finished ${key}`);
+  if (validateIds) {
+    console.log(duplicates);
   }
 }
 
@@ -137,6 +152,12 @@ interface ValueFormatters {
 const valueFormatters: ValueFormatters = {
   image: extractImageUrl,
   house: extractImageUrl,
+  furnitureImage: extractImageUrl,
+  critterpediaImage: extractImageUrl,
+  closetImage: extractImageUrl,
+  storageImage: extractImageUrl,
+  albumImage: extractImageUrl,
+  framedImage: extractImageUrl,
   uses: normaliseUse,
   source: (input: string) => input.split('\n'),
   startTime: normaliseTime,
@@ -157,6 +178,7 @@ const NULL_VALUES = new Set([
   'Does not play music',
   'No lighting',
 ]);
+
 const ALL_DAY: Array<[string, string]> = [
   [
     format(emptyDate(), TIME_FORMAT_OUT),
@@ -191,7 +213,13 @@ export async function normalizeData(data: ItemData, sheetKey: string) {
       }
 
       if (valueFormatter) {
-        value = valueFormatter(value, item);
+        try {
+          value = valueFormatter(value, item);
+        } catch (e) {
+          console.error(`Error formatting "${key}" for:`, item);
+
+          throw e;
+        }
       }
 
       if (
@@ -215,7 +243,37 @@ export async function normalizeData(data: ItemData, sheetKey: string) {
       item[key] = value;
     }
 
+    if (sheetKey === 'items') {
+      item['colors'] = [item['color2'], item['color2']].filter(item => !!item);
+      item['themes'] = [item['hhaConcept1'], item['hhaConcept2']].filter(
+        item => !!item,
+      );
+      item['labelThemes'] = item.labelThemes
+        ?.split(';')
+        .map((item: string) => item.trim());
+      item['set'] = item['hhaSet'];
+      item['series'] = item['hhaSeries'];
+      item['customizationKitCost'] = item['kitCost'];
+
+      delete item['color1'];
+      delete item['color2'];
+      delete item['hhaConcept1'];
+      delete item['hhaConcept2'];
+      delete item['hhaSet'];
+      delete item['hhaSeries'];
+
+      if (item.sourceSheet === 'Tools') {
+        delete item[''];
+      }
+    }
+
     if (sheetKey === 'creatures') {
+      // Temporary workaround
+      item['critterpediaImage'] = item['image'];
+      item['furnitureImage'] = item['house'];
+      delete item['image'];
+      delete item['house'];
+
       const startTime: string[] = item['startTime'];
       const endTime: string[] = item['endTime'];
       let activeHours: Array<[string, string]> = ALL_DAY;
@@ -232,10 +290,20 @@ export async function normalizeData(data: ItemData, sheetKey: string) {
         }
       }
 
+      item['specialSell'] = Math.round(item.sell * 1.5); // CJ / Flicks
       item['activeHours'] = activeHours;
+
+      item['activeMonths'] = {
+        northern: mapAvailability(pick(item, NH_AVAILABILITY_KEYS)),
+        southern: mapAvailability(pick(item, SH_AVAILABILITY_KEYS)),
+      };
 
       delete item['startTime'];
       delete item['endTime'];
+
+      for (const key of [...NH_AVAILABILITY_KEYS, ...SH_AVAILABILITY_KEYS]) {
+        delete item[key];
+      }
     }
 
     if (sheetKey === 'recipes') {
@@ -297,7 +365,9 @@ function normaliseUse(input: string | number) {
     return 9.5;
   }
 
-  throw new Error(`Unexpected Use value: ${input}`);
+  console.info(`Unexpected Use value: ${JSON.stringify(input)}`);
+
+  return -1;
 }
 
 function normaliseTime(input: string | number) {
@@ -331,48 +401,101 @@ function normaliseBirthday(input: string) {
   return format(output, BDAY_FORMAT_OUT);
 }
 
-const AVAILABILITY_KEYS = [
-  'jan',
-  'feb',
-  'mar',
-  'apr',
-  'may',
-  'jun',
-  'jul',
-  'aug',
-  'sep',
-  'oct',
-  'nov',
-  'dec',
+const NH_AVAILABILITY_KEYS = [
+  'nhJan',
+  'nhFeb',
+  'nhMar',
+  'nhApr',
+  'nhMay',
+  'nhJun',
+  'nhJul',
+  'nhAug',
+  'nhSep',
+  'nhOct',
+  'nhNov',
+  'nhDec',
 ];
 
-async function mergeCreatures(data: any[]) {
+const SH_AVAILABILITY_KEYS = [
+  'shJan',
+  'shFeb',
+  'shMar',
+  'shApr',
+  'shMay',
+  'shJun',
+  'shJul',
+  'shAug',
+  'shSep',
+  'shOct',
+  'shNov',
+  'shDec',
+];
+
+const ITEM_VARIATION_KEYS = [
+  'image',
+  'variation',
+  'filename',
+  'variantId',
+  'uniqueEntryId',
+  'colors',
+  'pattern',
+  'bodyCustomize',
+  'bodyTitle',
+  'source',
+  'closetImage',
+  'storageImage',
+  'internalId',
+  'labelThemes',
+  'genuine',
+  'buy',
+  'sell',
+  'themes',
+  'highResTexture',
+];
+
+const keysWithDifferentValueToRoot = new Set();
+
+async function mergeItemVariations(data: any[]) {
   const dataset: any = {};
 
-  for (let rawCreature of data) {
-    let creature = dataset[rawCreature.internalId];
-    const sheetInfo = rawCreature.sourceSheet.split(' - ');
-    const type = sheetInfo[0] === 'Fish' ? 'fish' : 'bug';
-    const hemisphere = sheetInfo[1] === 'North' ? 'northern' : 'southern';
-    delete rawCreature['sourceSheet'];
+  for (let rawItem of data) {
+    // if (! rawItem.name.toLower) {
+    //   console.log(rawItem);
+    //   process.exit(0);
+    // }
 
-    if (!creature) {
-      creature = {
-        ...omit(rawCreature, [...AVAILABILITY_KEYS, 'uniqueEntryId']),
-        type,
-        specialSell: Math.round(rawCreature.sell * 1.5), // CJ / Flicks
-        uniqueEntryId: {},
-        availability: {},
+    let key = (rawItem.name as string).toLowerCase();
+    let item = dataset[key];
+
+    if (!item) {
+      item = {
+        ...omit(rawItem, ITEM_VARIATION_KEYS),
+        variants: [],
       };
 
-      dataset[rawCreature.internalId] = creature;
+      dataset[key] = item;
     }
 
-    creature.uniqueEntryId[hemisphere] = rawCreature.uniqueEntryId;
-    creature.availability[hemisphere] = mapAvailability(
-      pick(rawCreature, AVAILABILITY_KEYS),
-    );
+    // item.variants.push(rawItem);
+    item.variants.push(pick(rawItem, ITEM_VARIATION_KEYS));
   }
+
+  // This part of the code generates the keys to be put into `ITEM_VARIATION_KEYS`
+  //
+  // for (let item of Object.values(dataset) as any) {
+  //   for (let variant of item.variants) {
+  //     for (let key of Object.keys(variant)) {
+  //       let val1 = item[key];
+  //       let val2 = variant[key];
+  //       const hasValue = val1 || val2;
+  //       if (!isEqual(val1,val2) && hasValue) {
+  //         keysWithDifferentValueToRoot.add(key);
+  //       }
+  //     }
+  //   }
+  // }
+  //
+  // console.log(keysWithDifferentValueToRoot)
 
   return Object.values(dataset);
 }

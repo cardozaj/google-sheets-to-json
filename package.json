@@ -1,13 +1,14 @@
 {
   "name": "@nooksbazaar/acdb",
-  "version": "1.0.0",
+  "version": "0.1.3",
   "scripts": {
     "build": "bash bin/build.sh",
-    "prettier:fix": "prettier '**/*.ts' README.md --write"
+    "prettier:fix": "prettier '**/*.ts' README.md --write",
+    "start": "tsc -w"
   },
   "author": "Adam Lavin",
   "license": "MIT",
-  "dependencies": {
+  "devDependencies": {
     "@types/lodash": "^4.14.150",
     "@types/node": "^13.13.0",
     "date-fns": "^2.12.0",

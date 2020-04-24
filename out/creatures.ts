@@ -1,8 +1,7 @@
 export interface Creatures {
+  sourceSheet: SourceSheet;
   num: number;
   name: string;
-  image: string;
-  house: string;
   sell: number;
   whereHow: string;
   shadow?: string;
@@ -12,15 +11,15 @@ export interface Creatures {
   color2: Color;
   size?: Size;
   lightingType?: LightingType | null;
-  critterpediaFilename: null | string;
-  itemFilename: string;
+  critterpediaFilename: string;
+  furnitureFilename: string;
   internalId: number;
-  activeHours: Array<ActiveHour[]>;
-  type: Type;
+  uniqueEntryId: string;
   specialSell: number;
-  uniqueEntryId: UniqueEntryID;
-  availability: Availability;
+  activeHours: Array<ActiveHour[]>;
+  activeMonths: ActiveMonths;
   weather?: Weather;
+  inventoryFilename?: null | string;
 }
 
 export enum ActiveHour {
@@ -42,7 +41,7 @@ export enum ActiveHour {
   The2200 = '22:00',
 }
 
-export interface Availability {
+export interface ActiveMonths {
   northern: number[];
   southern: number[];
 }
@@ -82,14 +81,9 @@ export enum Size {
   The3X2 = '3x2',
 }
 
-export enum Type {
-  Bug = 'bug',
-  Fish = 'fish',
-}
-
-export interface UniqueEntryID {
-  northern: string;
-  southern: string;
+export enum SourceSheet {
+  Bugs = 'Bugs',
+  Fish = 'Fish',
 }
 
 export enum Weather {
